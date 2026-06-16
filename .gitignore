@@ -1,4 +1,6 @@
 cookies.txt
+config.json
+.env
 state.json
 *.log
 .venv/

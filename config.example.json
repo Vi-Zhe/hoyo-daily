@@ -1,0 +1,10 @@
+{
+  "games": ["genshin", "starrail", "zzz"],
+  "checkin": true,
+  "redeem_codes": true,
+  "notify": {
+    "on_new_code": true,
+    "on_cookie_error": true,
+    "on_nothing": false
+  }
+}

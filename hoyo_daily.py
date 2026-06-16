@@ -2,19 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 HoYo daily — автономный скрипт: ежедневный чек-ин HoYoLab + активация промокодов
-для Genshin Impact, Honkai: Star Rail, Zenless Zone Zero.
+для Genshin Impact, Honkai: Star Rail, Zenless Zone Zero. Без Obsidian.
 
-Не зависит от Obsidian. Нужен только Python + библиотека genshin + твои куки.
+Настройки:
+  config.json — поведение (какие игры, чек-ин/коды вкл-выкл, когда слать уведомления).
+  .env        — секреты (вебхуки/токены, при желании сами куки).
+  cookies.txt — куки (или переменная окружения HOYO_COOKIES).
 
-Куки (одной строкой или по строкам key=value) в cookies.txt рядом со скриптом
-(или в переменной окружения HOYO_COOKIES):
-  ltoken_v2 + ltuid_v2            — с домена hoyolab.com            (нужны для чек-ина)
-  cookie_token_v2 + account_mid_v2 — с домена account.hoyoverse.com (нужны для кодов)
+Уведомления умные: шлются в Discord/Telegram ТОЛЬКО при событии
+(применён новый код / протухли куки) — настраивается в config.json.
 
-Запуск:
-  python3 hoyo_daily.py
-Уже активированные коды запоминаются в state.json (повторно не дёргаются).
-Опционально: переменная окружения DISCORD_WEBHOOK — пришлёт итог в Discord.
+Запуск: python3 hoyo_daily.py
 """
 
 import os
@@ -22,19 +20,30 @@ import sys
 import json
 import asyncio
 import urllib.request
+import urllib.parse
 import datetime as dt
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-COOKIE_FILE = os.getenv("HOYO_COOKIES_FILE") or str(HERE / "cookies.txt")
 STATE_FILE = HERE / "state.json"
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
-
 CODES_API = "https://hoyo-codes.seria.moe/codes?game={}"
-# (атрибут genshin.Game, ключ API кодов, метка)
-GAMES = [("GENSHIN", "genshin", "Genshin"), ("STARRAIL", "hkrpg", "HSR"), ("ZZZ", "nap", "ZZZ")]
+
+# ключ -> (атрибут genshin.Game, ключ API кодов, метка)
+GAME_DEFS = {
+    "genshin":  ("GENSHIN",  "genshin", "Genshin"),
+    "starrail": ("STARRAIL", "hkrpg",   "HSR"),
+    "zzz":      ("ZZZ",      "nap",     "ZZZ"),
+}
+
+DEFAULT_CONFIG = {
+    "games": ["genshin", "starrail", "zzz"],
+    "checkin": True,
+    "redeem_codes": True,
+    "notify": {"on_new_code": True, "on_cookie_error": True, "on_nothing": False},
+}
 
 _lines = []
+EVENTS = {"new_codes": [], "cookie_error": []}
 
 
 def log(m):
@@ -42,12 +51,41 @@ def log(m):
     _lines.append(m)
 
 
+def load_env():
+    f = HERE / ".env"
+    if not f.exists():
+        return
+    for line in f.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
+def load_config() -> dict:
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+    f = HERE / "config.json"
+    if f.exists():
+        try:
+            user = json.loads(f.read_text(encoding="utf-8"))
+            for k, v in user.items():
+                if k == "notify" and isinstance(v, dict):
+                    cfg["notify"].update(v)
+                else:
+                    cfg[k] = v
+        except Exception as e:  # noqa: BLE001
+            log(f"config.json — ошибка чтения ({e}), беру значения по умолчанию")
+    return cfg
+
+
 def get_cookies() -> dict:
     raw = os.getenv("HOYO_COOKIES")
-    if not raw and os.path.exists(COOKIE_FILE):
-        raw = Path(COOKIE_FILE).read_text(encoding="utf-8")
+    cf = os.getenv("HOYO_COOKIES_FILE") or str(HERE / "cookies.txt")
+    if not raw and os.path.exists(cf):
+        raw = Path(cf).read_text(encoding="utf-8")
     if not raw:
-        log("ОШИБКА: не найдены куки (cookies.txt или env HOYO_COOKIES)")
+        log("ОШИБКА: не найдены куки (cookies.txt / env HOYO_COOKIES)")
         sys.exit(1)
     cookies = {}
     for part in raw.replace("\n", ";").split(";"):
@@ -80,10 +118,10 @@ def save_state(s: dict):
     STATE_FILE.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def do_checkin(client, genshin):
+async def do_checkin(client, genshin, active):
     G = genshin.Game
     log("Чек-ин:")
-    for attr, _, label in GAMES:
+    for attr, _, label in active:
         g = getattr(G, attr, None)
         if g is None:
             continue
@@ -93,16 +131,17 @@ async def do_checkin(client, genshin):
         except genshin.AlreadyClaimed:
             log(f"  {label}: уже получено сегодня")
         except genshin.InvalidCookies as e:
-            log(f"  {label}: 🔴 плохие куки hoyolab (ltoken_v2/ltuid_v2) — {e}")
+            log(f"  {label}: 🔴 плохие куки hoyolab — {e}")
+            EVENTS["cookie_error"].append("hoyolab (ltoken_v2/ltuid_v2)")
         except Exception as e:  # noqa: BLE001
             log(f"  {label}: ошибка — {e}")
 
 
-async def do_redeem(client, genshin):
+async def do_redeem(client, genshin, active):
     G = genshin.Game
     state = load_state()
     log("Промокоды:")
-    for attr, api, label in GAMES:
+    for attr, api, label in active:
         g = getattr(G, attr, None)
         if g is None:
             continue
@@ -121,6 +160,7 @@ async def do_redeem(client, genshin):
                 await client.redeem_code(code, game=g)
                 log(f"  {label}: ✅ {code}  ({rew})")
                 done.add(code)
+                EVENTS["new_codes"].append(f"{label}: {code} — {rew}")
             except genshin.RedemptionClaimed:
                 log(f"  {label}: уже был активирован {code}")
                 done.add(code)
@@ -133,7 +173,8 @@ async def do_redeem(client, genshin):
             except Exception as e:  # noqa: BLE001
                 m = str(e)
                 if "cookie_token" in m or "-1071" in m or "log in to your account" in m:
-                    log(f"  {label}: 🔴 плохие куки hoyoverse (cookie_token_v2/account_mid_v2) — стоп")
+                    log(f"  {label}: 🔴 плохие куки hoyoverse — стоп")
+                    EVENTS["cookie_error"].append("hoyoverse (cookie_token_v2/account_mid_v2)")
                     save_state(state)
                     return
                 if "-2008" in m or "not eligible" in m:
@@ -146,30 +187,72 @@ async def do_redeem(client, genshin):
     save_state(state)
 
 
-def notify_discord():
-    if not DISCORD_WEBHOOK:
+def _post(url, data, headers):
+    urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=15)
+
+
+def send_discord(text):
+    url = os.getenv("DISCORD_WEBHOOK", "")
+    if not url:
         return
     try:
-        text = "**HoYo daily " + dt.date.today().isoformat() + "**\n" + "\n".join(_lines)
-        body = json.dumps({"content": text[:1900]}).encode("utf-8")
-        req = urllib.request.Request(DISCORD_WEBHOOK, data=body, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15)
+        _post(url, json.dumps({"content": text[:1900]}).encode("utf-8"), {"Content-Type": "application/json"})
     except Exception as e:  # noqa: BLE001
-        print("discord webhook error:", e)
+        print("discord error:", e)
+
+
+def send_telegram(text):
+    tok = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not tok or not chat:
+        return
+    try:
+        data = urllib.parse.urlencode({"chat_id": chat, "text": text[:3900]}).encode("utf-8")
+        _post(f"https://api.telegram.org/bot{tok}/sendMessage", data,
+              {"Content-Type": "application/x-www-form-urlencoded"})
+    except Exception as e:  # noqa: BLE001
+        print("telegram error:", e)
+
+
+def notify(cfg):
+    n = cfg["notify"]
+    trigger = ((EVENTS["cookie_error"] and n.get("on_cookie_error", True))
+               or (EVENTS["new_codes"] and n.get("on_new_code", True))
+               or n.get("on_nothing", False))
+    if not trigger:
+        return
+    parts = [f"🎮 HoYo daily — {dt.date.today().isoformat()}"]
+    if EVENTS["cookie_error"]:
+        parts.append("⚠️ Протухли куки: " + ", ".join(sorted(set(EVENTS["cookie_error"]))) + " — обнови.")
+    if EVENTS["new_codes"]:
+        parts.append("✅ Новые коды:\n" + "\n".join(EVENTS["new_codes"]))
+    if not EVENTS["cookie_error"] and not EVENTS["new_codes"]:
+        parts.append("Прогон без событий (чек-ин/коды отработали).")
+    msg = "\n".join(parts)
+    send_discord(msg)
+    send_telegram(msg)
 
 
 async def main():
+    load_env()
+    cfg = load_config()
     try:
         import genshin
     except ImportError:
         log("ОШИБКА: установи библиотеку: pip install genshin")
         sys.exit(1)
+    active = [GAME_DEFS[k] for k in cfg.get("games", []) if k in GAME_DEFS]
+    if not active:
+        log("В config.json не выбрано ни одной игры (поле games).")
+        sys.exit(1)
     client = genshin.Client(get_cookies())
     log("=== HoYo daily ===")
-    await do_checkin(client, genshin)
-    await do_redeem(client, genshin)
+    if cfg.get("checkin", True):
+        await do_checkin(client, genshin, active)
+    if cfg.get("redeem_codes", True):
+        await do_redeem(client, genshin, active)
     log("Готово.")
-    notify_discord()
+    notify(cfg)
 
 
 if __name__ == "__main__":
