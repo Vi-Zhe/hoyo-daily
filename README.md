@@ -14,19 +14,23 @@ cd hoyo-daily
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt        # Windows: .venv\Scripts\pip install -r requirements.txt
 
-# 2) куки: скопируй шаблон и впиши свои значения (см. ниже)
-cp cookies.example.txt cookies.txt
+# 2) секреты: скопируй шаблон и впиши куки (см. ниже)
+cp .env.example .env
 
 # 3) проверить
 .venv/bin/python hoyo_daily.py
 ```
 
 ## Куки (откуда брать)
-Залогинься на hoyolab.com, открой DevTools (F12) → Application/Storage → Cookies. Впиши в `cookies.txt`:
+Залогинься на hoyolab.com, открой DevTools (F12) → Application/Storage → Cookies. Нужны 4 значения:
 - `ltoken_v2`, `ltuid_v2` — с домена **hoyolab.com** (для чек-ина)
 - `cookie_token_v2`, `account_mid_v2` — с домена **account.hoyoverse.com** (для промокодов; именно этот домен!)
 
-UID игр указывать не нужно. Куки живут несколько месяцев; когда чек-ин/коды начнут писать «🔴 плохие куки» — впиши свежие.
+**Куда вписать (на выбор):**
+- **`.env`** (рекомендую — все секреты в одном файле): строкой `HOYO_COOKIES=ltoken_v2=...; ltuid_v2=...; cookie_token_v2=...; account_mid_v2=...`
+- или **`cookies.txt`** (`cp cookies.example.txt cookies.txt`) — по одному значению на строку, если так удобнее.
+
+Оба варианта локальны и в `.gitignore` (в репозиторий не попадают). Если задано и то и другое — приоритет у `.env`. UID игр не нужны. Куки живут несколько месяцев; когда пойдёт «🔴 плохие куки» — впиши свежие.
 
 ## Настройки (опционально) — `config.json`
 По умолчанию включено всё для 3 игр. Чтобы выбрать, **что именно отслеживать и применять**, — `cp config.example.json config.json` и правь.
