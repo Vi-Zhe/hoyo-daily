@@ -1,0 +1,8 @@
+# Впиши значения после = (без пробелов и кавычек).
+# Берёшь в браузере: F12 -> Application/Storage -> Cookies -> нужный домен.
+# ltoken_v2 и ltuid_v2             -> домен hoyolab.com             (для чек-ина)
+# cookie_token_v2 и account_mid_v2 -> домен account.hoyoverse.com   (для промокодов)
+ltoken_v2=
+ltuid_v2=
+cookie_token_v2=
+account_mid_v2=

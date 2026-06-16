@@ -1,0 +1,5 @@
+cookies.txt
+state.json
+*.log
+.venv/
+__pycache__/
