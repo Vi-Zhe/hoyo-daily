@@ -29,18 +29,28 @@ cp cookies.example.txt cookies.txt
 UID игр указывать не нужно. Куки живут несколько месяцев; когда чек-ин/коды начнут писать «🔴 плохие куки» — впиши свежие.
 
 ## Настройки (опционально) — `config.json`
-По умолчанию включено всё. Чтобы изменить — `cp config.example.json config.json` и правь:
+По умолчанию включено всё для 3 игр. Чтобы выбрать, **что именно отслеживать и применять**, — `cp config.example.json config.json` и правь.
+
+**По каждой игре отдельно** (рекомендую): для каждой игры свои тумблеры `checkin` (чек-ин) и `codes` (промокоды):
 ```json
 {
-  "games": ["genshin", "starrail", "zzz"],   // какие игры обрабатывать
-  "checkin": true,                            // делать чек-ин
-  "redeem_codes": true,                       // активировать коды
-  "notify": {
-    "on_new_code": true,        // пинговать, когда применён новый код
-    "on_cookie_error": true,    // пинговать, когда протухли куки
-    "on_nothing": false         // пинговать даже если событий не было
+  "games": {
+    "genshin":  { "checkin": true,  "codes": true  },
+    "starrail": { "checkin": true,  "codes": false },   // HSR: только чек-ин
+    "zzz":      { "checkin": false, "codes": true  }     // ZZZ: только коды
   }
 }
+```
+Чтобы игру **вообще не трогать** — убери её из `games` (или поставь `"zzz": false`).
+
+**Простой вид** (то же для всех): список игр + глобальные тумблеры:
+```json
+{ "games": ["genshin", "zzz"], "checkin": true, "redeem_codes": false }
+```
+
+Уведомления — блок `notify`:
+```json
+"notify": { "on_new_code": true, "on_cookie_error": true, "on_nothing": false }
 ```
 
 ## Уведомления (опционально) — `.env`

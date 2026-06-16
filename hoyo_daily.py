@@ -36,9 +36,13 @@ GAME_DEFS = {
 }
 
 DEFAULT_CONFIG = {
-    "games": ["genshin", "starrail", "zzz"],
-    "checkin": True,
-    "redeem_codes": True,
+    # Можно указать список игр (тогда действуют глобальные checkin/redeem_codes),
+    # ЛИБО объект с настройкой по каждой игре отдельно (см. config.example.json).
+    "games": {
+        "genshin":  {"checkin": True, "codes": True},
+        "starrail": {"checkin": True, "codes": True},
+        "zzz":      {"checkin": True, "codes": True},
+    },
     "notify": {"on_new_code": True, "on_cookie_error": True, "on_nothing": False},
 }
 
@@ -77,6 +81,30 @@ def load_config() -> dict:
         except Exception as e:  # noqa: BLE001
             log(f"config.json — ошибка чтения ({e}), беру значения по умолчанию")
     return cfg
+
+
+def resolve_games(cfg) -> dict:
+    """Нормализует cfg['games'] в {ключ: {'checkin': bool, 'codes': bool}}.
+    Поддерживает список ['genshin', ...] (глобальные checkin/redeem_codes)
+    и объект {'genshin': {'checkin': true, 'codes': false}, ...} / {'genshin': true}."""
+    raw = cfg.get("games", [])
+    gc = bool(cfg.get("checkin", True))
+    rc = bool(cfg.get("redeem_codes", True))
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k not in GAME_DEFS:
+                continue
+            if v is True:
+                out[k] = {"checkin": True, "codes": True}
+            elif isinstance(v, dict):
+                out[k] = {"checkin": bool(v.get("checkin", True)), "codes": bool(v.get("codes", True))}
+            # v is False / иное → игра пропускается
+    elif isinstance(raw, list):
+        for k in raw:
+            if k in GAME_DEFS:
+                out[k] = {"checkin": gc, "codes": rc}
+    return out
 
 
 def get_cookies() -> dict:
@@ -241,16 +269,18 @@ async def main():
     except ImportError:
         log("ОШИБКА: установи библиотеку: pip install genshin")
         sys.exit(1)
-    active = [GAME_DEFS[k] for k in cfg.get("games", []) if k in GAME_DEFS]
-    if not active:
+    games = resolve_games(cfg)
+    if not games:
         log("В config.json не выбрано ни одной игры (поле games).")
         sys.exit(1)
+    checkin_active = [GAME_DEFS[k] for k, f in games.items() if f["checkin"]]
+    codes_active = [GAME_DEFS[k] for k, f in games.items() if f["codes"]]
     client = genshin.Client(get_cookies())
     log("=== HoYo daily ===")
-    if cfg.get("checkin", True):
-        await do_checkin(client, genshin, active)
-    if cfg.get("redeem_codes", True):
-        await do_redeem(client, genshin, active)
+    if checkin_active:
+        await do_checkin(client, genshin, checkin_active)
+    if codes_active:
+        await do_redeem(client, genshin, codes_active)
     log("Готово.")
     notify(cfg)
 
